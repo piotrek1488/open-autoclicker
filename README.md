@@ -1,6 +1,6 @@
 <img src="packaging/icons/icon_256.png" width="96" height="96" align="left" alt="Open Auto Clicker icon">
 
-# Open Auto Clicker
+### Open Auto Clicker
 
 A simple, cross-platform mouse auto clicker with a GUI. It automates mouse
 clicks at a configurable interval and runs on **Linux**, **Windows** and
