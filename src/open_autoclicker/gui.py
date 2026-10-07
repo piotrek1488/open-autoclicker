@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QObject, QSettings, Signal, Slot
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 from . import APP_ID, APP_NAME, __version__
 from .clicker import ClickConfig, ClickType, ClickerEngine, MouseButton
 from .hotkey import DEFAULT_HOTKEY, HotkeyManager, normalize_hotkey
+from .icons import app_icon
 
 
 class _EngineBridge(QObject):
@@ -60,8 +62,6 @@ class MainWindow(QWidget):
         )
 
         # Title-bar / taskbar icon.
-        from open_autoclicker.app import app_icon
-
         icon = app_icon()
         self._app_icon = icon
         if not icon.isNull():
@@ -77,17 +77,42 @@ class MainWindow(QWidget):
         self._build_ui()
         self._wire_signals()
         self._setup_tray(icon)
-        # Diagnostic escape hatch: set OAC_NO_HOTKEY=1 to skip the global hotkey
-        # listener (helps isolate whether pynput is the cause of a freeze).
-        import os
-
-        if not os.environ.get("OAC_NO_HOTKEY"):
-            self._register_hotkey(DEFAULT_HOTKEY, announce=False)
+        self._register_hotkey(DEFAULT_HOTKEY, announce=False)
         self._update_button_states(running=False)
 
         # Restore the "close to tray" preference.
         minimize = self._settings.value("minimize_to_tray", True, type=bool)
         self.minimize_to_tray_check.setChecked(minimize)
+
+        # Restore the last-used interval (seconds), falling back to the default.
+        saved_interval = self._settings.value(
+            "interval_s", self.interval_spin.value(), type=int
+        )
+        self.interval_spin.setValue(saved_interval)
+        self.interval_spin.valueChanged.connect(
+            lambda v: self._settings.setValue("interval_s", v)
+        )
+
+        # Restore the click / cursor-movement mode and distance, then persist
+        # any changes so the chosen mode (click, move, or both) is remembered.
+        self.click_enabled_check.setChecked(
+            self._settings.value("do_click", True, type=bool)
+        )
+        self.jiggle_check.setChecked(
+            self._settings.value("jiggle", False, type=bool)
+        )
+        self.jiggle_px_spin.setValue(
+            self._settings.value("jiggle_px", self.jiggle_px_spin.value(), type=int)
+        )
+        self.click_enabled_check.toggled.connect(
+            lambda v: self._settings.setValue("do_click", v)
+        )
+        self.jiggle_check.toggled.connect(
+            lambda v: self._settings.setValue("jiggle", v)
+        )
+        self.jiggle_px_spin.valueChanged.connect(
+            lambda v: self._settings.setValue("jiggle_px", v)
+        )
 
         # Lock the window to its natural size: no resizing, no maximizing.
         self.setFixedSize(self.sizeHint())
@@ -143,6 +168,9 @@ class MainWindow(QWidget):
         # Click options
         options_box = QGroupBox("Click options")
         options_form = QFormLayout(options_box)
+        self.click_enabled_check = QCheckBox("Click the mouse")
+        self.click_enabled_check.setChecked(True)
+        options_form.addRow(self.click_enabled_check)
         self.button_combo = QComboBox()
         self.button_combo.addItem("Left", MouseButton.LEFT)
         self.button_combo.addItem("Middle", MouseButton.MIDDLE)
@@ -154,6 +182,18 @@ class MainWindow(QWidget):
         self.click_combo.addItem("Double", ClickType.DOUBLE)
         options_form.addRow("Click type:", self.click_combo)
         root.addWidget(options_box)
+
+        # Cursor movement (anti-sleep jiggle), runs on the same interval.
+        move_box = QGroupBox("Cursor movement")
+        move_form = QFormLayout(move_box)
+        self.jiggle_check = QCheckBox("Move the cursor (keeps the system awake)")
+        move_form.addRow(self.jiggle_check)
+        self.jiggle_px_spin = QSpinBox()
+        self.jiggle_px_spin.setRange(1, 500)
+        self.jiggle_px_spin.setValue(10)
+        self.jiggle_px_spin.setSuffix(" px")
+        move_form.addRow("Move distance:", self.jiggle_px_spin)
+        root.addWidget(move_box)
 
         # Repeat
         repeat_box = QGroupBox("Repeat")
@@ -285,6 +325,9 @@ class MainWindow(QWidget):
             repeat_count=repeat,
             random_jitter_ms=self.jitter_spin.value(),
             start_delay_ms=self.predelay_spin.value(),
+            do_click=self.click_enabled_check.isChecked(),
+            jiggle=self.jiggle_check.isChecked(),
+            jiggle_px=self.jiggle_px_spin.value(),
         )
 
     def _set_config_enabled(self, enabled: bool) -> None:
@@ -294,6 +337,9 @@ class MainWindow(QWidget):
             self.predelay_spin,
             self.button_combo,
             self.click_combo,
+            self.click_enabled_check,
+            self.jiggle_check,
+            self.jiggle_px_spin,
             self.repeat_infinite,
             self.repeat_count_radio,
             self.hotkey_edit,
@@ -348,21 +394,33 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "Invalid hotkey", f"Could not set hotkey: {exc}")
 
     # ---- engine signal handlers ------------------------------------------------
+    def _action_word(self) -> str:
+        """Describe the running action based on the enabled modes."""
+        click = self.click_enabled_check.isChecked()
+        move = self.jiggle_check.isChecked()
+        if click and move:
+            return "Clicking + moving"
+        if move:
+            return "Moving cursor"
+        return "Clicking"
+
     @Slot()
     def on_engine_started(self) -> None:
         self._set_config_enabled(False)
         self._update_button_states(running=True)
-        self.status_label.setText("Clicking...")
+        self._action_label = self._action_word()
+        self.status_label.setText(f"{self._action_label}...")
 
     @Slot(int)
     def on_engine_stopped(self, total: int) -> None:
         self._set_config_enabled(True)
         self._update_button_states(running=False)
-        self.status_label.setText(f"Stopped after {total} clicks")
+        self.status_label.setText(f"Stopped after {total} actions")
 
     @Slot(int)
     def on_engine_tick(self, count: int) -> None:
-        self.status_label.setText(f"Clicking... ({count})")
+        label = getattr(self, "_action_label", "Running")
+        self.status_label.setText(f"{label}... ({count})")
 
     @Slot(str)
     def on_engine_error(self, message: str) -> None:
@@ -422,11 +480,24 @@ class MainWindow(QWidget):
     @Slot()
     def quit_app(self) -> None:
         """Really exit the application (bypasses minimize-to-tray)."""
-        from PySide6.QtWidgets import QApplication
-
-        self._force_quit = True
-        self.close()
+        self._shutdown()
+        # Close via Qt's normal shutdown. The hotkey listener is a daemon
+        # thread, so nothing keeps the process alive once the loop ends.
         QApplication.quit()
+
+    def _shutdown(self) -> None:
+        """Release everything cleanly before the process exits."""
+        self._force_quit = True
+        try:
+            self._engine.close()
+        except Exception:
+            pass
+        try:
+            self._hotkeys.stop()
+        except Exception:
+            pass
+        if self._tray is not None:
+            self._tray.hide()
 
     # ---- lifecycle -------------------------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
@@ -449,9 +520,7 @@ class MainWindow(QWidget):
                 self._settings.setValue("tray_hint_shown", True)
             return
 
-        # Real shutdown: stop everything and clean up the tray.
-        self._engine.stop(join=True)
-        self._hotkeys.stop()
-        if self._tray is not None:
-            self._tray.hide()
+        # Real shutdown: release everything and let Qt close normally. The
+        # hotkey listener is a daemon thread, so the process ends on its own.
+        self._shutdown()
         super().closeEvent(event)

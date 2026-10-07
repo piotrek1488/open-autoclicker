@@ -29,6 +29,10 @@ hidden = collect_submodules("pynput") + [
     "pynput._util.darwin",
 ]
 
+# Linux-only: evdev powers the Wayland cursor backend (imported lazily).
+if sys.platform.startswith("linux"):
+    hidden += collect_submodules("evdev")
+
 # Per-platform icon file for the executable/bundle.
 if sys.platform == "win32":
     exe_icon = "icon.ico"

@@ -77,6 +77,8 @@ class HotkeyManager:
         self._callback = callback
         self._combo = combo
         self._listener = keyboard.GlobalHotKeys({combo: self._on_activate})
+        # Daemonise so a lingering listener never blocks interpreter shutdown.
+        self._listener.daemon = True
         self._listener.start()
 
     def _on_activate(self) -> None:
@@ -85,5 +87,10 @@ class HotkeyManager:
 
     def stop(self) -> None:
         if self._listener is not None:
-            self._listener.stop()
+            try:
+                self._listener.stop()
+            except Exception:
+                # pynput can raise if the listener never fully started; the
+                # thread is a daemon, so it won't keep the process alive.
+                pass
             self._listener = None

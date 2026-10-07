@@ -5,5 +5,6 @@ Comment=Cross-platform mouse auto clicker
 Exec=open-autoclicker
 Icon=open-autoclicker
 Terminal=false
+StartupNotify=false
 Categories=Utility;
 Keywords=autoclicker;mouse;automation;clicker;

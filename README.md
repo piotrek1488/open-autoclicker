@@ -14,9 +14,13 @@ Built with Python, [PySide6](https://doc.qt.io/qtforpython/) (Qt) and
 
 - Left / middle / right mouse button
 - Single or double click
+- Optional **cursor movement** (anti-sleep jiggle) on the same interval —
+  clicking and movement are independent, so you can run click only, move only,
+  or both
 - Click interval entered in **seconds** (minimum 1 s), with a live breakdown
   into seconds / minutes / hours next to the field (default: 4 minutes). The
   1 s floor guarantees you can always regain control of the pointer to stop.
+  The last-used interval is remembered between runs.
 - Random extra delay (jitter) and a one-off start delay, both in milliseconds
 - Fixed number of repeats or "repeat until stopped"
 - Global start/stop hotkey (default **F6**), works even when the window is not
@@ -35,15 +39,19 @@ Built with Python, [PySide6](https://doc.qt.io/qtforpython/) (Qt) and
    the grey label next to it shows the equivalent in minutes/hours. Minimum is
    1 second.
 3. **Pick the button and click type** under *Click options* (left/middle/right,
-   single or double).
-4. *(Optional)* Add a **random extra delay** for a less robotic rhythm, or a
+   single or double). Untick *Click the mouse* if you only want cursor
+   movement.
+4. *(Optional)* Under *Cursor movement*, tick *Move the cursor* to nudge the
+   pointer each interval — useful to keep the system awake. Set the distance in
+   pixels. You can combine it with clicking or use it on its own.
+5. *(Optional)* Add a **random extra delay** for a less robotic rhythm, or a
    **start delay** to give yourself time to position the pointer before the
    first click.
-5. **Choose how long to run** under *Repeat*: either "repeat until stopped" or
+6. **Choose how long to run** under *Repeat*: either "repeat until stopped" or
    a fixed number of clicks.
-6. **Position the mouse** where you want the clicks to land.
-7. Press **Start** (or your hotkey). The app clicks at the chosen interval.
-8. Press **Stop**, or the hotkey again, to end. Because the interval is at
+7. **Position the mouse** where you want the clicks to land.
+8. Press **Start** (or your hotkey). The app clicks at the chosen interval.
+9. Press **Stop**, or the hotkey again, to end. Because the interval is at
    least 1 second, you always have time to move the pointer back and stop.
 
 ### Global hotkey
@@ -62,6 +70,9 @@ closing the window keeps the app running in the tray instead of quitting.
 Right-click (or click) the tray icon and choose **Show / Hide** to bring the
 window back, or **Quit** to exit for real.
 
+> On GNOME/Wayland, quitting from the tray menu leaves a brief "busy" cursor —
+> see [Known limitations](#known-limitations).
+
 ## Project layout
 
 ```
@@ -72,8 +83,10 @@ open-autoclicker/
 │   ├── __main__.py                # module entry (python -m open_autoclicker)
 │   ├── app.py                     # app bootstrap + entry point
 │   ├── clicker.py                 # threaded click engine (no Qt dependency)
+│   ├── mouse_backend.py           # pynput / evdev-uinput mouse backends
 │   ├── hotkey.py                  # global hotkey manager
 │   ├── gui.py                     # PySide6 window
+│   ├── icons.py                   # bundled icon loading
 │   └── resources/                 # bundled app icon
 └── packaging/
     ├── open-autoclicker.spec      # PyInstaller build spec (all 3 OSes)
@@ -100,8 +113,20 @@ access:
 
 - **macOS**: on first run, grant the app (or your terminal) permission under
   *System Settings → Privacy & Security → Accessibility*.
-- **Linux/Wayland**: global input works best under X11. On a pure Wayland
-  session the global hotkey may not fire; clicking still works.
+- **Linux (X11)**: clicking and cursor movement work out of the box via
+  pynput.
+- **Linux (Wayland)**: the compositor blocks pynput from moving the cursor, so
+  the app falls back to a kernel-level virtual mouse through `/dev/uinput`
+  (via `evdev`). This needs write access to `/dev/uinput` — typically being in
+  the `input` group:
+
+  ```bash
+  sudo usermod -aG input "$USER"   # then log out and back in
+  ```
+
+  If `/dev/uinput` isn't writable, cursor movement is unavailable and the app
+  falls back to pynput (clicking only). Note: the **global hotkey** still may
+  not fire on a pure Wayland session — that's a Wayland restriction.
 - **Windows**: no special setup; some antivirus tools flag input-automation
   tools, so you may need to allow it.
 
@@ -182,6 +207,18 @@ submit`), otherwise Gatekeeper will warn users. For personal use the unsigned
 `.app`/`.dmg` is fine (right-click → Open on first launch).
 
 ---
+
+## Known limitations
+
+Mostly GNOME/Wayland specifics, confirmed by testing and not fixable from
+inside the app:
+
+| Behaviour | Why |
+| --- | --- |
+| Cursor movement needs `/dev/uinput` on Wayland | The compositor blocks pynput from moving the pointer. The app falls back to a kernel-level virtual mouse; without write access to `/dev/uinput` only clicking works. See [Permissions note](#permissions-note). |
+| Global hotkey may not fire on Wayland | Wayland does not let applications grab global keys. Use the Start/Stop buttons instead. |
+| No app icon in the window title bar | GNOME does not draw application icons in window headers. The icon still shows in the dock, Alt+Tab and the tray. |
+| Busy cursor for a few seconds after **Quit** from the tray menu | How GNOME reacts to an app disappearing during an AppIndicator menu action. Reproducible with a bare Qt tray app, with or without delays. The app does exit fully — no leftover process or virtual input device. Closing with the **X** button avoids it. |
 
 ## Cutting a release
 

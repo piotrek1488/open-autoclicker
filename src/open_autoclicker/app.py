@@ -7,31 +7,21 @@ where relative imports have no parent package.
 
 from __future__ import annotations
 
+import os
 import sys
 
 
-def app_icon():
-    """Load the bundled application icon as a QIcon.
-
-    Works both from source and from a PyInstaller bundle. Returns an empty
-    QIcon if the resource cannot be found, so startup never fails over an icon.
-    """
-    from importlib.resources import files
-
-    from PySide6.QtGui import QIcon
-
-    try:
-        path = files("open_autoclicker.resources") / "icon.png"
-        return QIcon(str(path))
-    except Exception:
-        return QIcon()
-
-
 def main() -> int:
+    # Drop any inherited startup-notification tokens so a stale token can't be
+    # reused for this process.
+    for var in ("DESKTOP_STARTUP_ID", "XDG_ACTIVATION_TOKEN"):
+        os.environ.pop(var, None)
+
     from PySide6.QtWidgets import QApplication
 
     from open_autoclicker import APP_ID, APP_NAME
     from open_autoclicker.gui import MainWindow
+    from open_autoclicker.icons import app_icon
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
