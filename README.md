@@ -14,14 +14,53 @@ Built with Python, [PySide6](https://doc.qt.io/qtforpython/) (Qt) and
 
 - Left / middle / right mouse button
 - Single or double click
-- Configurable click interval in ms, with a live breakdown into seconds /
-  minutes / hours next to the field (default: 4 minutes)
+- Click interval entered in **seconds** (minimum 1 s), with a live breakdown
+  into seconds / minutes / hours next to the field (default: 4 minutes). The
+  1 s floor guarantees you can always regain control of the pointer to stop.
+- Random extra delay (jitter) and a one-off start delay, both in milliseconds
 - Fixed number of repeats or "repeat until stopped"
-- Random extra delay (jitter) for a less robotic cadence
-- One-off start delay (pre-delay)
-- Global start/stop hotkey (works even when the window is not focused)
+- Global start/stop hotkey (default **F6**), works even when the window is not
+  focused
 - Separate **Start** and **Stop** buttons: Start is greyed-out while clicking,
   Stop is greyed-out while idle
+- Optional **close-to-tray**: closing the window keeps the app running in the
+  system tray; restore it from the tray menu. The preference is remembered.
+- Fixed-size window; app icon in the dock / taskbar
+
+## Usage
+
+1. **Launch** the app (from your menu after installing, or `open-autoclicker`
+   from a terminal).
+2. **Set the interval** under *Click interval* — the value is in seconds, and
+   the grey label next to it shows the equivalent in minutes/hours. Minimum is
+   1 second.
+3. **Pick the button and click type** under *Click options* (left/middle/right,
+   single or double).
+4. *(Optional)* Add a **random extra delay** for a less robotic rhythm, or a
+   **start delay** to give yourself time to position the pointer before the
+   first click.
+5. **Choose how long to run** under *Repeat*: either "repeat until stopped" or
+   a fixed number of clicks.
+6. **Position the mouse** where you want the clicks to land.
+7. Press **Start** (or your hotkey). The app clicks at the chosen interval.
+8. Press **Stop**, or the hotkey again, to end. Because the interval is at
+   least 1 second, you always have time to move the pointer back and stop.
+
+### Global hotkey
+
+The default start/stop hotkey is **F6** and works even when the window is not
+focused. Change it in the *Global hotkey* box (e.g. `F6`, `Ctrl+Shift+K`) and
+click **Apply**.
+
+> On a pure **Wayland** session the global hotkey may not fire — this is a
+> Wayland restriction, not a bug. Clicking from the Start button still works.
+
+### Running in the background (tray)
+
+With *Close button minimizes to the system tray* enabled (on by default),
+closing the window keeps the app running in the tray instead of quitting.
+Right-click (or click) the tray icon and choose **Show / Hide** to bring the
+window back, or **Quit** to exit for real.
 
 ## Project layout
 
@@ -30,13 +69,16 @@ open-autoclicker/
 ├── pyproject.toml                 # package metadata + dependencies
 ├── src/open_autoclicker/
 │   ├── __init__.py                # app name / version
-│   ├── __main__.py                # entry point (python -m open_autoclicker)
+│   ├── __main__.py                # module entry (python -m open_autoclicker)
+│   ├── app.py                     # app bootstrap + entry point
 │   ├── clicker.py                 # threaded click engine (no Qt dependency)
 │   ├── hotkey.py                  # global hotkey manager
-│   └── gui.py                     # PySide6 window
+│   ├── gui.py                     # PySide6 window
+│   └── resources/                 # bundled app icon
 └── packaging/
     ├── open-autoclicker.spec      # PyInstaller build spec (all 3 OSes)
     ├── open-autoclicker.desktop   # Linux desktop entry
+    ├── icon.svg / icon.ico / icon.icns   # app icons per platform
     └── build-deb.sh               # builds a .deb from the PyInstaller bundle
 ```
 
@@ -81,13 +123,13 @@ pip install -e ".[build]"
 
 ```bash
 pyinstaller packaging/open-autoclicker.spec   # -> dist/open-autoclicker/
-bash packaging/build-deb.sh                   # -> dist/open-autoclicker_1.0.0_amd64.deb
+bash packaging/build-deb.sh                   # -> dist/open-autoclicker_<version>_amd64.deb
 ```
 
-Install and test:
+Install and test (version comes from `pyproject.toml`):
 
 ```bash
-sudo apt install ./dist/open-autoclicker_1.0.0_amd64.deb
+sudo apt install ./dist/open-autoclicker_*_amd64.deb
 open-autoclicker
 ```
 
@@ -131,7 +173,7 @@ Wrap the `.app` in a `.dmg` for distribution:
 ```bash
 hdiutil create -volname "Open Auto Clicker" \
   -srcfolder "dist/Open Auto Clicker.app" \
-  -ov -format UDZO "dist/OpenAutoClicker-1.0.0.dmg"
+  -ov -format UDZO "dist/OpenAutoClicker.dmg"
 ```
 
 For distribution outside your own machine you'll also want to **codesign** and
@@ -164,6 +206,10 @@ OS. This repo ships GitHub Actions workflows that do exactly that:
 
 > The workflows target the `master` branch. If your default branch is `main`,
 > change the `branches:` key in `build.yml` accordingly.
+
+## Notes
+
+This application was built with the help of AI.
 
 ## License
 
