@@ -9,7 +9,25 @@ from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 
-hidden = collect_submodules("pynput")
+# pynput loads its platform backend dynamically at runtime (importlib), so
+# PyInstaller's static analysis misses it. collect_submodules only grabs the
+# current platform's backend, so we also list every backend explicitly. The
+# imports for other platforms simply won't be used at runtime.
+hidden = collect_submodules("pynput") + [
+    # Linux (X11)
+    "pynput.keyboard._xorg",
+    "pynput.mouse._xorg",
+    "pynput._util.xorg",
+    "pynput._util.xorg_keysyms",
+    # Windows
+    "pynput.keyboard._win32",
+    "pynput.mouse._win32",
+    "pynput._util.win32",
+    # macOS
+    "pynput.keyboard._darwin",
+    "pynput.mouse._darwin",
+    "pynput._util.darwin",
+]
 
 a = Analysis(
     ["../src/open_autoclicker/app.py"],
