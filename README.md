@@ -1,9 +1,6 @@
-<table border="0"><tr>
-  <td><img src="packaging/icons/icon_256.png" width="128" height="128" alt="Open Auto Clicker icon"></td>
-  <td><span style="font-size: 2em; font-weight: 600;">Open Auto Clicker</span></td>
-</tr></table>
+<img src="packaging/icons/icon_256.png" width="96" height="96" align="left" alt="Open Auto Clicker icon">
 
-<hr>
+# Open Auto Clicker
 
 A simple, cross-platform mouse auto clicker with a GUI. It automates mouse
 clicks at a configurable interval and runs on **Linux**, **Windows** and
