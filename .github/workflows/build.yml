@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             artifact: linux-deb
           - os: windows-latest
             artifact: windows
