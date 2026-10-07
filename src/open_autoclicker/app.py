@@ -35,7 +35,8 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setApplicationDisplayName(APP_NAME)
+    # Note: deliberately not calling setApplicationDisplayName — Qt would append
+    # " - <display name>" to every window title.
     app.setDesktopFileName(APP_ID)
 
     icon = app_icon()

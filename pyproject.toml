@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-autoclicker"
-version = "1.0.0"
+version = "1.0.2"
 description = "Cross-platform mouse auto clicker with GUI, global hotkey and configurable click behaviour."
 readme = "README.md"
 requires-python = ">=3.9"

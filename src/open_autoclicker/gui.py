@@ -6,23 +6,26 @@ touches widgets is marshalled onto the Qt thread via signals.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QObject, Signal, Slot
+from PySide6.QtCore import Qt, QObject, QSettings, Signal, Slot
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QRadioButton,
     QSpinBox,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
-from . import APP_NAME, __version__
+from . import APP_ID, APP_NAME, __version__
 from .clicker import ClickConfig, ClickType, ClickerEngine, MouseButton
 from .hotkey import DEFAULT_HOTKEY, HotkeyManager, normalize_hotkey
 
@@ -41,29 +44,86 @@ class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} {__version__}")
-        self.setMinimumWidth(380)
 
+        # Keep only the minimize and close buttons; drop the maximize button so
+        # the fixed-size window can't be maximized. MSWindowsFixedSizeDialogHint
+        # tells the window manager (incl. GNOME/Wayland) the window is a fixed
+        # size, which suppresses the maximize affordance that would otherwise be
+        # drawn regardless of the button hints.
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowCloseButtonHint
+            | Qt.MSWindowsFixedSizeDialogHint
+        )
+
+        # Title-bar / taskbar icon.
+        from open_autoclicker.app import app_icon
+
+        icon = app_icon()
+        self._app_icon = icon
+        if not icon.isNull():
+            self.setWindowIcon(icon)
+
+        self._settings = QSettings(APP_ID, APP_ID)
         self._engine = ClickerEngine()
         self._hotkeys = HotkeyManager()
         self._bridge = _EngineBridge()
+        self._tray = None
+        self._force_quit = False
 
         self._build_ui()
         self._wire_signals()
-        self._register_hotkey(DEFAULT_HOTKEY, announce=False)
+        self._setup_tray(icon)
+        # Diagnostic escape hatch: set OAC_NO_HOTKEY=1 to skip the global hotkey
+        # listener (helps isolate whether pynput is the cause of a freeze).
+        import os
+
+        if not os.environ.get("OAC_NO_HOTKEY"):
+            self._register_hotkey(DEFAULT_HOTKEY, announce=False)
         self._update_button_states(running=False)
 
+        # Restore the "close to tray" preference.
+        minimize = self._settings.value("minimize_to_tray", True, type=bool)
+        self.minimize_to_tray_check.setChecked(minimize)
+
+        # Lock the window to its natural size: no resizing, no maximizing.
+        self.setFixedSize(self.sizeHint())
+
     # ---- UI construction -------------------------------------------------------
+    def _make_ms_row(self, form, label, default, maximum, minimum=0):
+        """Add a form row with a millisecond spinbox plus a live, grey
+        human-readable duration label next to it. Returns (spinbox, label)."""
+        spin = QSpinBox()
+        spin.setRange(minimum, maximum)
+        spin.setValue(default)
+        spin.setSuffix(" ms")
+
+        human = QLabel()
+        human.setStyleSheet("color: gray;")
+
+        row = QHBoxLayout()
+        row.addWidget(spin)
+        row.addWidget(human)
+        row.addStretch(1)
+        form.addRow(label, row)
+        return spin, human
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
         # Click interval
         interval_box = QGroupBox("Click interval")
         interval_form = QFormLayout(interval_box)
+
+        # Interval is entered in whole seconds (minimum 1 s). Jitter and start
+        # delay stay in milliseconds for finer control.
         self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(0, 86_400_000)  # up to 24 h
-        self.interval_spin.setValue(240_000)  # default: 4 minutes
-        self.interval_spin.setSuffix(" ms")
-        # Human-readable breakdown shown next to the spinbox, e.g. "= 4 min".
+        self.interval_spin.setRange(1, 86_400)  # 1 s .. 24 h
+        self.interval_spin.setValue(240)  # default: 4 minutes
+        self.interval_spin.setSuffix(" s")
         self.interval_human = QLabel()
         self.interval_human.setStyleSheet("color: gray;")
         interval_row = QHBoxLayout()
@@ -72,17 +132,12 @@ class MainWindow(QWidget):
         interval_row.addStretch(1)
         interval_form.addRow("Interval:", interval_row)
 
-        self.jitter_spin = QSpinBox()
-        self.jitter_spin.setRange(0, 3_600_000)
-        self.jitter_spin.setValue(0)
-        self.jitter_spin.setSuffix(" ms")
-        interval_form.addRow("Random extra delay:", self.jitter_spin)
-
-        self.predelay_spin = QSpinBox()
-        self.predelay_spin.setRange(0, 3_600_000)
-        self.predelay_spin.setValue(0)
-        self.predelay_spin.setSuffix(" ms")
-        interval_form.addRow("Start delay:", self.predelay_spin)
+        self.jitter_spin, self.jitter_human = self._make_ms_row(
+            interval_form, "Random extra delay:", default=0, maximum=3_600_000
+        )
+        self.predelay_spin, self.predelay_human = self._make_ms_row(
+            interval_form, "Start delay:", default=0, maximum=3_600_000
+        )
         root.addWidget(interval_box)
 
         # Click options
@@ -132,6 +187,15 @@ class MainWindow(QWidget):
         hotkey_form.addRow("", hint)
         root.addWidget(hotkey_box)
 
+        # Window behaviour
+        window_box = QGroupBox("Window")
+        window_layout = QVBoxLayout(window_box)
+        self.minimize_to_tray_check = QCheckBox(
+            "Close button minimizes to the system tray"
+        )
+        window_layout.addWidget(self.minimize_to_tray_check)
+        root.addWidget(window_box)
+
         # Start / Stop buttons
         buttons_row = QHBoxLayout()
         self.start_button = QPushButton("Start")
@@ -152,10 +216,27 @@ class MainWindow(QWidget):
         self.start_button.clicked.connect(self.on_start_clicked)
         self.stop_button.clicked.connect(self.on_stop_clicked)
         self.hotkey_apply.clicked.connect(self.on_apply_hotkey)
+        self.minimize_to_tray_check.toggled.connect(self._on_minimize_pref_changed)
 
-        # Live human-readable breakdown of the interval.
-        self.interval_spin.valueChanged.connect(self._update_interval_human)
-        self._update_interval_human(self.interval_spin.value())
+        # Interval is in seconds: convert to ms for the human-readable label.
+        self.interval_spin.valueChanged.connect(
+            lambda s: self.interval_human.setText(
+                self._format_duration(round(s * 1000))
+            )
+        )
+        self.interval_human.setText(
+            self._format_duration(round(self.interval_spin.value() * 1000))
+        )
+
+        # Jitter and start delay stay in milliseconds.
+        for spin, human in (
+            (self.jitter_spin, self.jitter_human),
+            (self.predelay_spin, self.predelay_human),
+        ):
+            spin.valueChanged.connect(
+                lambda ms, lbl=human: lbl.setText(self._format_duration(ms))
+            )
+            human.setText(self._format_duration(spin.value()))
 
         # Engine callbacks -> Qt signals (thread-safe hop onto the UI thread).
         self._engine.set_callbacks(
@@ -175,9 +256,9 @@ class MainWindow(QWidget):
     def _format_duration(ms: int) -> str:
         """Return a short human-readable form of a millisecond duration."""
         if ms <= 0:
-            return "= 0 s (as fast as possible)"
+            return "0 s (as fast as possible)"
         if ms < 1000:
-            return f"= {ms} ms"
+            return f"{ms} ms"
 
         hours, rem = divmod(ms, 3_600_000)
         minutes, rem = divmod(rem, 60_000)
@@ -192,17 +273,13 @@ class MainWindow(QWidget):
             # Drop a trailing ".0" for whole seconds.
             s = f"{seconds:.1f}".rstrip("0").rstrip(".")
             parts.append(f"{s} s")
-        return "= " + " ".join(parts)
-
-    @Slot(int)
-    def _update_interval_human(self, ms: int) -> None:
-        self.interval_human.setText(self._format_duration(ms))
+        return " ".join(parts)
 
     # ---- config ----------------------------------------------------------------
     def _build_config(self) -> ClickConfig:
         repeat = None if self.repeat_infinite.isChecked() else self.repeat_count_spin.value()
         return ClickConfig(
-            interval_ms=self.interval_spin.value(),
+            interval_ms=round(self.interval_spin.value() * 1000),  # seconds -> ms
             button=self.button_combo.currentData(),
             click_type=self.click_combo.currentData(),
             repeat_count=repeat,
@@ -293,8 +370,88 @@ class MainWindow(QWidget):
         self._set_config_enabled(True)
         QMessageBox.critical(self, "Error", message)
 
+    # ---- system tray -----------------------------------------------------------
+    def _setup_tray(self, icon) -> None:
+        """Create the system tray icon and its menu, if a tray is available."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+
+        self._tray = QSystemTrayIcon(self)
+        if not icon.isNull():
+            self._tray.setIcon(icon)
+        self._tray.setToolTip(APP_NAME)
+
+        menu = QMenu()
+        # "Show / Hide" is the default action. On desktops where a single click
+        # opens the menu (e.g. GNOME/Wayland AppIndicator) it is the highlighted
+        # entry, so showing/hiding the window takes minimal effort. Direct
+        # tray click/double-click is intentionally not used: restoring from the
+        # activation signal hangs under GNOME/Wayland AppIndicator.
+        toggle_action = menu.addAction("Show / Hide")
+        toggle_action.triggered.connect(self._toggle_window)
+        menu.setDefaultAction(toggle_action)
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit")
+        quit_action.triggered.connect(self.quit_app)
+        self._tray.setContextMenu(menu)
+
+        self._tray.show()
+
+    @Slot()
+    def _on_minimize_pref_changed(self, checked: bool) -> None:
+        self._settings.setValue("minimize_to_tray", checked)
+
+    def _restore_window(self) -> None:
+        """Bring the window back from the tray.
+
+        Uses showNormal() to clear any minimized state and recreate the
+        surface, then best-effort raise/activate (Wayland may ignore the
+        latter, but they are harmless).
+        """
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _toggle_window(self) -> None:
+        """Hide the window if it is visible, otherwise restore it."""
+        if self.isVisible() and not self.isMinimized():
+            self.hide()
+        else:
+            self._restore_window()
+
+    @Slot()
+    def quit_app(self) -> None:
+        """Really exit the application (bypasses minimize-to-tray)."""
+        from PySide6.QtWidgets import QApplication
+
+        self._force_quit = True
+        self.close()
+        QApplication.quit()
+
     # ---- lifecycle -------------------------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        # If the user asked for close-to-tray and a tray is available, hide
+        # instead of quitting (unless this is a real quit via the tray menu).
+        if (
+            not self._force_quit
+            and self.minimize_to_tray_check.isChecked()
+            and self._tray is not None
+        ):
+            event.ignore()
+            self.hide()
+            if not self._settings.value("tray_hint_shown", False, type=bool):
+                self._tray.showMessage(
+                    APP_NAME,
+                    "Still running in the tray. Click the icon to restore.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    3000,
+                )
+                self._settings.setValue("tray_hint_shown", True)
+            return
+
+        # Real shutdown: stop everything and clean up the tray.
         self._engine.stop(join=True)
         self._hotkeys.stop()
+        if self._tray is not None:
+            self._tray.hide()
         super().closeEvent(event)

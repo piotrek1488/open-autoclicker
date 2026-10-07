@@ -39,6 +39,11 @@ class ClickType(str, Enum):
     DOUBLE = "double"
 
 
+# Minimum allowed interval between clicks. A 1 s floor guarantees the user can
+# always move the pointer and click Stop (or the tray) to regain control.
+MIN_INTERVAL_MS = 1000
+
+
 @dataclass
 class ClickConfig:
     """Configuration for a clicking session.
@@ -52,16 +57,29 @@ class ClickConfig:
     start_delay_ms: one-off delay before the first click (pre-delay).
     """
 
-    interval_ms: int = 100
+    interval_ms: int = 1000
     button: MouseButton = MouseButton.LEFT
     click_type: ClickType = ClickType.SINGLE
     repeat_count: Optional[int] = None
     random_jitter_ms: int = 0
     start_delay_ms: int = 0
 
+    def __post_init__(self) -> None:
+        # Ensure enums are actual enum members, not bare strings (can happen
+        # when Qt's QComboBox.currentData() returns a serialised value inside
+        # a frozen/PyInstaller bundle).
+        if isinstance(self.button, str) and not isinstance(self.button, MouseButton):
+            self.button = MouseButton(self.button)
+        if isinstance(self.click_type, str) and not isinstance(self.click_type, ClickType):
+            self.click_type = ClickType(self.click_type)
+
     def validate(self) -> None:
-        if self.interval_ms < 0:
-            raise ValueError("interval_ms must be >= 0")
+        # Enforce a 1 s floor on the interval: faster than that and the user may
+        # not be able to regain control of the pointer to stop the app.
+        if self.interval_ms < MIN_INTERVAL_MS:
+            raise ValueError(
+                f"interval_ms must be >= {MIN_INTERVAL_MS} (at least 1 second)"
+            )
         if self.random_jitter_ms < 0:
             raise ValueError("random_jitter_ms must be >= 0")
         if self.start_delay_ms < 0:
