@@ -12,7 +12,7 @@ block_cipher = None
 hidden = collect_submodules("pynput")
 
 a = Analysis(
-    ["../src/open_autoclicker/__main__.py"],
+    ["../src/open_autoclicker/app.py"],
     pathex=["../src"],
     binaries=[],
     datas=[],

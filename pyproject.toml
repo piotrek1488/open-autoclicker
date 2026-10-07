@@ -24,10 +24,10 @@ Homepage = "https://github.com/example/open-autoclicker"
 Repository = "https://github.com/example/open-autoclicker"
 
 [project.scripts]
-open-autoclicker = "open_autoclicker.__main__:main"
+open-autoclicker = "open_autoclicker.app:main"
 
 [project.gui-scripts]
-open-autoclicker-gui = "open_autoclicker.__main__:main"
+open-autoclicker-gui = "open_autoclicker.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
