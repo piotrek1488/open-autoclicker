@@ -29,11 +29,20 @@ hidden = collect_submodules("pynput") + [
     "pynput._util.darwin",
 ]
 
+# Per-platform icon file for the executable/bundle.
+if sys.platform == "win32":
+    exe_icon = "icon.ico"
+elif sys.platform == "darwin":
+    exe_icon = "icon.icns"
+else:
+    exe_icon = None  # Linux icon comes from the .desktop entry + hicolor theme
+
 a = Analysis(
     ["../src/open_autoclicker/app.py"],
     pathex=["../src"],
     binaries=[],
-    datas=[],
+    # Ship the PNG so the Qt window icon works at runtime on every platform.
+    datas=[("../src/open_autoclicker/resources/icon.png", "open_autoclicker/resources")],
     hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],
@@ -54,6 +63,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,  # GUI app: no console window on Windows
+    icon=exe_icon,
 )
 
 coll = COLLECT(
@@ -71,7 +81,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="Open Auto Clicker.app",
-        icon=None,  # add path to an .icns here if you have one
+        icon="icon.icns",
         bundle_identifier="io.github.open_autoclicker",
         info_plist={
             "NSHighResolutionCapable": True,

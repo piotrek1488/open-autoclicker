@@ -1,4 +1,8 @@
-# Open Auto Clicker
+<p align="center">
+  <img src="packaging/icons/icon_256.png" width="128" height="128" alt="Open Auto Clicker icon">
+</p>
+
+<h1 align="center">Open Auto Clicker</h1>
 
 A simple, cross-platform mouse auto clicker with a GUI. It automates mouse
 clicks at a configurable interval and runs on **Linux**, **Windows** and
@@ -11,7 +15,8 @@ Built with Python, [PySide6](https://doc.qt.io/qtforpython/) (Qt) and
 
 - Left / middle / right mouse button
 - Single or double click
-- Configurable click interval (ms)
+- Configurable click interval in ms, with a live breakdown into seconds /
+  minutes / hours next to the field (default: 4 minutes)
 - Fixed number of repeats or "repeat until stopped"
 - Random extra delay (jitter) for a less robotic cadence
 - One-off start delay (pre-delay)

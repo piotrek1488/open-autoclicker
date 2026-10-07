@@ -39,6 +39,15 @@ ln -sf "/opt/$PKG/$PKG" "$PKGROOT/usr/bin/$PKG"
 install -d "$PKGROOT/usr/share/applications"
 cp "$HERE/open-autoclicker.desktop" "$PKGROOT/usr/share/applications/"
 
+# Install themed icons so the desktop/menu picks them up by the "open-autoclicker" name.
+for s in 16 24 32 48 64 128 256 512; do
+  if [[ -f "$HERE/icons/icon_${s}.png" ]]; then
+    install -d "$PKGROOT/usr/share/icons/hicolor/${s}x${s}/apps"
+    cp "$HERE/icons/icon_${s}.png" \
+       "$PKGROOT/usr/share/icons/hicolor/${s}x${s}/apps/open-autoclicker.png"
+  fi
+done
+
 # Control metadata. Dependencies are deliberately minimal because the Qt/Python
 # runtime is bundled; these are just the low-level X libs PyInstaller needs.
 install -d "$PKGROOT/DEBIAN"

@@ -60,10 +60,17 @@ class MainWindow(QWidget):
         interval_box = QGroupBox("Click interval")
         interval_form = QFormLayout(interval_box)
         self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(0, 3_600_000)
-        self.interval_spin.setValue(100)
+        self.interval_spin.setRange(0, 86_400_000)  # up to 24 h
+        self.interval_spin.setValue(240_000)  # default: 4 minutes
         self.interval_spin.setSuffix(" ms")
-        interval_form.addRow("Interval:", self.interval_spin)
+        # Human-readable breakdown shown next to the spinbox, e.g. "= 4 min".
+        self.interval_human = QLabel()
+        self.interval_human.setStyleSheet("color: gray;")
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(self.interval_spin)
+        interval_row.addWidget(self.interval_human)
+        interval_row.addStretch(1)
+        interval_form.addRow("Interval:", interval_row)
 
         self.jitter_spin = QSpinBox()
         self.jitter_spin.setRange(0, 3_600_000)
@@ -146,6 +153,10 @@ class MainWindow(QWidget):
         self.stop_button.clicked.connect(self.on_stop_clicked)
         self.hotkey_apply.clicked.connect(self.on_apply_hotkey)
 
+        # Live human-readable breakdown of the interval.
+        self.interval_spin.valueChanged.connect(self._update_interval_human)
+        self._update_interval_human(self.interval_spin.value())
+
         # Engine callbacks -> Qt signals (thread-safe hop onto the UI thread).
         self._engine.set_callbacks(
             on_started=self._bridge.started.emit,
@@ -158,6 +169,34 @@ class MainWindow(QWidget):
         self._bridge.tick.connect(self.on_engine_tick)
         self._bridge.error.connect(self.on_engine_error)
         self._bridge.hotkey_pressed.connect(self.on_hotkey_toggle)
+
+    # ---- interval helper -------------------------------------------------------
+    @staticmethod
+    def _format_duration(ms: int) -> str:
+        """Return a short human-readable form of a millisecond duration."""
+        if ms <= 0:
+            return "= 0 s (as fast as possible)"
+        if ms < 1000:
+            return f"= {ms} ms"
+
+        hours, rem = divmod(ms, 3_600_000)
+        minutes, rem = divmod(rem, 60_000)
+        seconds = rem / 1000.0
+
+        parts = []
+        if hours:
+            parts.append(f"{hours} h")
+        if minutes:
+            parts.append(f"{minutes} min")
+        if seconds:
+            # Drop a trailing ".0" for whole seconds.
+            s = f"{seconds:.1f}".rstrip("0").rstrip(".")
+            parts.append(f"{s} s")
+        return "= " + " ".join(parts)
+
+    @Slot(int)
+    def _update_interval_human(self, ms: int) -> None:
+        self.interval_human.setText(self._format_duration(ms))
 
     # ---- config ----------------------------------------------------------------
     def _build_config(self) -> ClickConfig:
