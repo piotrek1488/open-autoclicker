@@ -1,0 +1,196 @@
+"""Core auto-clicking engine.
+
+Runs the click loop in a background thread so the GUI stays responsive.
+The engine is intentionally free of any Qt dependency so it can be tested
+and reused in isolation.
+"""
+
+from __future__ import annotations
+
+import random
+import threading
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable, Optional
+
+from pynput.mouse import Button, Controller
+
+
+class MouseButton(str, Enum):
+    """Mouse button to click."""
+
+    LEFT = "left"
+    MIDDLE = "middle"
+    RIGHT = "right"
+
+    def to_pynput(self) -> Button:
+        return {
+            MouseButton.LEFT: Button.left,
+            MouseButton.MIDDLE: Button.middle,
+            MouseButton.RIGHT: Button.right,
+        }[self]
+
+
+class ClickType(str, Enum):
+    """Single or double click per iteration."""
+
+    SINGLE = "single"
+    DOUBLE = "double"
+
+
+@dataclass
+class ClickConfig:
+    """Configuration for a clicking session.
+
+    interval_ms: base delay between clicks in milliseconds.
+    button: which mouse button to press.
+    click_type: single or double click per repetition.
+    repeat_count: number of clicks to perform; None or <= 0 means infinite.
+    random_jitter_ms: maximum extra random delay (0..jitter) added to each
+        interval to emulate a more human-like cadence.
+    start_delay_ms: one-off delay before the first click (pre-delay).
+    """
+
+    interval_ms: int = 100
+    button: MouseButton = MouseButton.LEFT
+    click_type: ClickType = ClickType.SINGLE
+    repeat_count: Optional[int] = None
+    random_jitter_ms: int = 0
+    start_delay_ms: int = 0
+
+    def validate(self) -> None:
+        if self.interval_ms < 0:
+            raise ValueError("interval_ms must be >= 0")
+        if self.random_jitter_ms < 0:
+            raise ValueError("random_jitter_ms must be >= 0")
+        if self.start_delay_ms < 0:
+            raise ValueError("start_delay_ms must be >= 0")
+
+    def is_infinite(self) -> bool:
+        return self.repeat_count is None or self.repeat_count <= 0
+
+
+@dataclass
+class _Callbacks:
+    on_started: Optional[Callable[[], None]] = None
+    on_stopped: Optional[Callable[[int], None]] = None
+    on_tick: Optional[Callable[[int], None]] = None
+    on_error: Optional[Callable[[Exception], None]] = None
+
+
+class ClickerEngine:
+    """Threaded auto-clicker.
+
+    Call start(config) to begin and stop() to end. Callbacks are invoked from
+    the worker thread, so GUI consumers must marshal them onto the UI thread.
+    """
+
+    def __init__(self) -> None:
+        self._mouse = Controller()
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._clicks_done = 0
+        self._callbacks = _Callbacks()
+
+    # ---- callback registration -------------------------------------------------
+    def set_callbacks(
+        self,
+        on_started: Optional[Callable[[], None]] = None,
+        on_stopped: Optional[Callable[[int], None]] = None,
+        on_tick: Optional[Callable[[int], None]] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
+    ) -> None:
+        self._callbacks = _Callbacks(on_started, on_stopped, on_tick, on_error)
+
+    # ---- state -----------------------------------------------------------------
+    @property
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def clicks_done(self) -> int:
+        return self._clicks_done
+
+    # ---- control ---------------------------------------------------------------
+    def start(self, config: ClickConfig) -> bool:
+        """Start clicking. Returns False if already running."""
+        config.validate()
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return False
+            self._stop_event.clear()
+            self._clicks_done = 0
+            self._thread = threading.Thread(
+                target=self._run, args=(config,), name="clicker-engine", daemon=True
+            )
+            self._thread.start()
+        return True
+
+    def stop(self, join: bool = False, timeout: float = 2.0) -> None:
+        """Signal the worker to stop. Optionally wait for it to finish."""
+        self._stop_event.set()
+        if join:
+            thread = self._thread
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout)
+
+    def toggle(self, config: ClickConfig) -> bool:
+        """Start if stopped, stop if running. Returns True if now running."""
+        if self.is_running:
+            self.stop()
+            return False
+        self.start(config)
+        return True
+
+    # ---- worker ----------------------------------------------------------------
+    def _run(self, config: ClickConfig) -> None:
+        if self._callbacks.on_started:
+            self._callbacks.on_started()
+        try:
+            if config.start_delay_ms > 0:
+                if self._sleep_interruptible(config.start_delay_ms / 1000.0):
+                    return
+
+            button = config.button.to_pynput()
+            double = config.click_type == ClickType.DOUBLE
+
+            while not self._stop_event.is_set():
+                if not config.is_infinite() and self._clicks_done >= config.repeat_count:
+                    break
+
+                self._do_click(button, double)
+                self._clicks_done += 1
+                if self._callbacks.on_tick:
+                    self._callbacks.on_tick(self._clicks_done)
+
+                if not config.is_infinite() and self._clicks_done >= config.repeat_count:
+                    break
+
+                delay = config.interval_ms / 1000.0
+                if config.random_jitter_ms > 0:
+                    delay += random.uniform(0, config.random_jitter_ms / 1000.0)
+                if self._sleep_interruptible(delay):
+                    break
+        except Exception as exc:  # pragma: no cover - defensive
+            if self._callbacks.on_error:
+                self._callbacks.on_error(exc)
+        finally:
+            if self._callbacks.on_stopped:
+                self._callbacks.on_stopped(self._clicks_done)
+
+    def _do_click(self, button: Button, double: bool) -> None:
+        count = 2 if double else 1
+        self._mouse.click(button, count)
+
+    def _sleep_interruptible(self, seconds: float) -> bool:
+        """Sleep up to `seconds`, waking early if stop is requested.
+
+        Returns True if a stop was requested during the sleep.
+        """
+        if seconds <= 0:
+            return self._stop_event.is_set()
+        # Event.wait returns True as soon as the event is set.
+        return self._stop_event.wait(seconds)
